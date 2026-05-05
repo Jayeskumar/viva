@@ -430,6 +430,49 @@
   /* Focus rings */
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   input:focus-visible { outline: none; }
+
+  /* Mobile-specific tightening (≤599px) */
+  @media (max-width: 599px) {
+    .app { padding: calc(10px + var(--safe-top)) 12px calc(12px + var(--safe-bottom)); }
+    .card { padding: 14px; border-radius: 14px; }
+    .player-card { padding: 18px 14px 14px; gap: 14px; }
+    .now-row { flex-direction: column; align-items: center; text-align: center; gap: 14px; }
+    .art-wrap { width: min(60vw, 220px); height: min(60vw, 220px); }
+    .art, .art-placeholder { border-radius: 16px; }
+    .track-title {
+      font-size: 19px; line-height: 1.2;
+      -webkit-line-clamp: 2;
+    }
+    .track-artist { font-size: 12px; }
+    .controls { gap: 18px; }
+    .ctrl { width: 46px; height: 46px; }
+    .ctrl.primary { width: 58px; height: 58px; }
+    .results, .queue { max-height: 44vh; }
+    .chat { height: 240px; }
+    .header-actions { gap: 6px; }
+    .pill { padding: 5px 10px; font-size: 11px; }
+    .icon-btn { width: 34px; height: 34px; }
+    h1 { font-size: 16px; }
+    .tabs { padding: 3px; gap: 2px; }
+    .tab { padding: 9px 6px; font-size: 12px; }
+    .tab svg { display: none; }
+    .search-row .field { min-width: 0; }
+    .grid { gap: 14px; }
+    .stack { gap: 14px; }
+  }
+  /* Very small phones */
+  @media (max-width: 359px) {
+    .ctrl { width: 42px; height: 42px; }
+    .ctrl.primary { width: 52px; height: 52px; }
+    .controls { gap: 12px; }
+    .vol-row { display: none; }
+  }
+  /* Landscape phone — keep it compact */
+  @media (max-width: 899px) and (orientation: landscape) and (max-height: 500px) {
+    .now-row { flex-direction: row; text-align: left; }
+    .art-wrap { width: 80px; height: 80px; }
+    .chat { height: 200px; }
+  }
 </style>
 </head>
 <body>
@@ -716,6 +759,8 @@
     state = s;
     render();
     syncPlayer();
+    updateMediaSession();
+    updateWakeLock();
   });
 
   socket.on('chat', (m) => {
@@ -992,6 +1037,60 @@
   }
   chatSend.addEventListener('click', sendChat);
   chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+  // Lock-screen controls (MediaSession API)
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    const cur = state && state.queue[state.currentIdx];
+    if (!cur) {
+      try { navigator.mediaSession.metadata = null; } catch (e) {}
+      navigator.mediaSession.playbackState = 'none';
+      return;
+    }
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: cur.title || '',
+        artist: cur.artist || '',
+        album: 'Viva',
+        artwork: cur.image ? [
+          { src: cur.image, sizes: '320x180', type: 'image/jpeg' },
+          { src: `https://i.ytimg.com/vi/${cur.videoId}/hqdefault.jpg`, sizes: '480x360', type: 'image/jpeg' },
+        ] : [],
+      });
+    } catch (e) {}
+    navigator.mediaSession.playbackState = state.isPlaying ? 'playing' : 'paused';
+  }
+  if ('mediaSession' in navigator) {
+    const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
+    set('play', () => socket.emit('play'));
+    set('pause', () => socket.emit('pause'));
+    set('previoustrack', () => socket.emit('prev'));
+    set('nexttrack', () => socket.emit('next'));
+    set('seekto', (d) => { if (typeof d.seekTime === 'number') socket.emit('seek', { position: d.seekTime }); });
+  }
+
+  // Screen Wake Lock — keep screen on while playback is active
+  let wakeLock = null;
+  async function updateWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    const shouldHold = !!(state && state.isPlaying && state.queue[state.currentIdx]);
+    try {
+      if (shouldHold && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } else if (!shouldHold && wakeLock) {
+        await wakeLock.release(); wakeLock = null;
+      }
+    } catch (e) {}
+  }
+
+  // When the tab returns to the foreground, immediately resync to live position
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      syncPlayer();
+      updateWakeLock();
+    }
+  });
 
   // Periodic resync to handle drift
   setInterval(() => { if (state) syncPlayer(); }, 2500);
