@@ -1,0 +1,13 @@
+{
+  "name": "viva",
+  "version": "1.0.0",
+  "description": "Collaborative synchronized music listening room",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.1",
+    "socket.io": "^4.8.1"
+  }
+}
